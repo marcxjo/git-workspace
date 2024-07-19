@@ -1,0 +1,303 @@
+#!/bin/bash
+
+# Disable check for using source with a non-constant path value
+# We control the input, but we also want to keep it flexible
+# shellcheck disable=SC1090
+
+# Variables ####################################################################
+
+declare -r SCRIPT_NAME="${0##*/}"
+declare -r GIT_WORKSPACE_LIB_DIR="${GIT_WORKSPACE_LIB_DIR:-${HOME}/.local/lib/git-workspace}"
+
+# shellcheck source=../lib/common.sh
+. "${GIT_WORKSPACE_LIB_DIR%/}/common.sh"
+
+# TFM ##########################################################################
+
+usage() {
+  cat <<EOF
+NAME
+    $SCRIPT_NAME - track the repositories in your workspaces
+
+SYNOPSIS
+    git workspace add [WORKSPACE] [ROOT_PATH]
+    git workspace [WORKSPACE] root get
+    git workspace [WORKSPACE] root set ROOT_PATH
+    git workspace [WORKSPACE] cache get
+    git workspace [WORKSPACE] cache set CACHE_FILE
+    git workspace [WORKSPACE] cache update
+
+DESCRIPTION
+    Parameters:
+
+    WORKSPACE
+        The name of the workspace to act upon in the following command.
+        This parameter is set to "default" when omitted.
+
+    ROOT_PATH
+        The absolute path to the workspace's root directory (i.e., where all
+        repositories belonging to this workspace can be found)
+
+EOF
+}
+
+# Functions ####################################################################
+
+# Suppress warnings about unused array - we pass by name
+# shellcheck disable=SC2034
+declare -a GIT_WORKSPACE_ERR_MSGS=()
+declare -a GIT_WORKSPACE_INFO_MSGS=()
+
+append_err_msg() {
+  local -r _msg="$*"
+
+  array_append_msg GIT_WORKSPACE_ERR_MSGS "[ERR] ${SCRIPT_NAME}: ${_msg}"
+}
+
+print_err_msgs() {
+  [[ ${#GIT_WORKSPACE_ERR_MSGS[@]} -ne 0 ]] &&
+    printf '%s\n' "${GIT_WORKSPACE_ERR_MSGS[@]}"
+}
+
+append_info_msg() {
+  local -r _msg="$*"
+
+  array_append_msg GIT_WORKSPACE_INFO_MSGS "[INFO] ${SCRIPT_NAME}: ${_msg}"
+}
+
+print_info_msgs() {
+  [[ ${#GIT_WORKSPACE_INFO_MSGS[@]} -ne 0 ]] &&
+    printf '%s\n' "${GIT_WORKSPACE_INFO_MSGS[@]}"
+}
+
+add_workspace_config_section() {
+  local -r _workspace_name="$1"
+
+  # We have to add a dummy property to create a config new section
+  # By design, this value is not used anywhere else
+  git config --global --bool "workspace.${_workspace_name}.active" 1
+}
+
+remove_workspace_config_section() {
+  local -r _workspace_name="$1"
+
+  # We have to add a dummy property to create a config new section
+  # By design, this value is not used anywhere else
+  git config --global --remove-section "workspace.${_workspace_name}"
+}
+
+get_workspace_rootPath() {
+  local -r _workspace_name="$1"
+
+  git config --global --get "workspace.${_workspace_name}.rootPath"
+}
+
+set_workspace_rootPath() {
+  local -r _workspace_name="$1"
+  local -r _root_dir="$2"
+
+  git config --global "workspace.${_workspace_name}.rootPath" "$_root_dir"
+}
+
+get_workspace_cacheFile() {
+  local -r _workspace_name="$1"
+
+  git config --global --get "workspace.${_workspace_name}.cacheFile"
+}
+
+set_workspace_cacheFile() {
+  local -r _workspace_name="$1"
+  local -r _cache_file="$2"
+
+  git config --global "workspace.${_workspace_name}.cacheFile" "$_cache_file"
+}
+
+# Subcommands ##################################################################
+
+#
+# add verb
+#
+
+git_workspace_add() {
+  local -r _workspace_name="$1"
+
+  add_workspace_config_section "${_workspace_name}" &&
+    append_info_msg "successfully added workspace '${_workspace_name}' to global config" &&
+    append_info_msg "use \`git workspace ${_workspace_name} root set\` to set root directory" &&
+    append_info_msg "use \`git workspace ${_workspace_name} cache set\` to set cache file" &&
+    append_info_msg "use \`git workspace ${_workspace_name} cache update\` to cache current repo dirs"
+}
+
+#
+# rm verb - undocumented as this is a destructive action
+#
+
+git_workspace_rm() {
+  local -r _workspace_name="$1"
+
+  remove_workspace_config_section "${_workspace_name}" &&
+    append_info_msg "successfully removed workspace '${_workspace_name}' from global config"
+}
+
+#
+# root property
+#
+
+git_workspace_root_get() {
+  local -r _workspace_name="$1"
+
+  get_workspace_rootPath "$_workspace_name"
+}
+
+git_workspace_root_set() {
+  local -r _workspace_name="$1"
+  local -r _workspace_root_abs_path="$2"
+
+  set_workspace_rootPath "$_workspace_name" "$_workspace_root_abs_path"
+}
+
+git_workspace_root_property() {
+  local -r _verb="$1"
+  local -r _workspace_name="$2"
+  local -r _workspace_root="$3"
+
+  case "$_verb" in
+  'get')
+    git_workspace_root_get "$_workspace_name"
+    ;;
+  'set')
+    git_workspace_root_set "$_workspace_name" "$_workspace_root"
+    ;;
+  *)
+    append_err_msg "unsupported verb '${_verb}' on property 'root'" &&
+      status=1
+    ;;
+  esac
+}
+
+#
+# cache property
+#
+
+git_workspace_cache_get() {
+  local -r _workspace_name="$1"
+
+  get_workspace_cacheFile "$_workspace_name"
+}
+
+git_workspace_cache_set() {
+  local -r _workspace_name="$1"
+  local -r _workspace_cache_file_abs_path="$2"
+
+  set_workspace_cacheFile "$_workspace_name" "$_workspace_cache_file_abs_path"
+}
+
+git_workspace_cache_update() {
+  local -r _workspace_name="$1"
+  local -r _workspace_root="$(get_workspace_rootPath "$_workspace_name")"
+  local -r _workspace_cache="$(get_workspace_cacheFile "$_workspace_name")"
+
+  find "$_workspace_root" -type d -name '.git' -exec dirname {} \; | sort | uniq >"$_workspace_cache" &&
+    append_info_msg "successfully updated repository cache" &&
+    return 0
+
+  append_err_msg "failed to update workspace cache - check your file/directory permissions"
+}
+
+git_workspace_cache_property() {
+  local -r _verb="$1"
+  local -r _workspace_name="$2"
+  local -r _workspace_cache="$3"
+
+  case "$_verb" in
+  'get')
+    git_workspace_cache_get "$_workspace_name"
+    ;;
+  'set')
+    git_workspace_cache_set "$_workspace_name" "$_workspace_cache"
+    ;;
+  'update')
+    git_workspace_cache_update "$_workspace_name"
+    ;;
+  *)
+    append_err_msg "unsupported verb '${_verb}' on property 'cache'" &&
+      status=1
+    ;;
+  esac
+}
+
+git_workspace_unsupported_property() {
+  local -r _arg="$1"
+
+  append_err_msg "unsupported parameter '${_arg}' - use 'add' to create a new workspace" &&
+    return 1
+}
+
+################################################################################
+
+is_a_workspace() {
+  local -r _candidate="$1"
+  local -rn _workspace_arr="$2"
+
+  is_in_array "$_candidate" '_workspaces_arr'
+}
+
+get_all_workspaces() {
+  git config --global --list | grep "workspace" | cut -d. -f2 | sort | uniq
+}
+
+print_log_msgs() {
+  print_err_msgs
+  print_info_msgs
+}
+
+main() {
+  IFS=$'\n' local -ar _workspaces=("$(get_all_workspaces)")
+
+  local _workspace_name='default'
+  local _workspace_root
+  local _workspace_cache
+  local _property
+  local _verb
+
+  is_a_workspace "$1" '_workspaces' &&
+    _workspace_name="$1" &&
+    shift 1
+
+  case "$1" in
+  'add')
+    _workspace_name="${2:-${_workspace_name}}"
+    git_workspace_add "$_workspace_name"
+    ;;
+  'rm')
+    _workspace_name="${2:-${_workspace_name}}"
+    git_workspace_rm "$_workspace_name"
+    ;;
+  'root')
+    _verb="$2"
+    _workspace_root="$3"
+    git_workspace_root_property "$_verb" "$_workspace_name" "$_workspace_root"
+    ;;
+  'cache')
+    _verb="$2"
+    _workspace_cache="$3"
+    git_workspace_cache_property "$_verb" "$_workspace_name" "$_workspace_cache"
+    ;;
+  *)
+    git_workspace_unsupported_property "$1"
+    ;;
+  esac
+
+  local -i status=$?
+
+  print_log_msgs
+
+  [[ $status -ne 0 ]] &&
+    echo &&
+    usage &&
+    exit $status
+
+  exit $status
+}
+
+main "$@"
