@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Disable hint to un-quote right-hand side of regex checks
+# We use this pattern to check whether a word is specifcally an array element,
+# not just a matching substring
+# shellcheck disable=SC2076
+
+shopt -s nullglob
+
+source /usr/share/bash-completion/completions/git
+
+__git_workspace_get_matching_workspace_names() {
+  local -rn _workspaces_arr="$1"
+  local -r cur="$2"
+
+  while read -r line; do
+    _workspaces_arr+=("$line")
+  done <<<"$(git config --global --get-regexp --name-only "workspace\.${cur}.*\.active" | cut -d. -f2)"
+}
+
+_git_workspace() {
+  local _cur="${COMP_WORDS[COMP_CWORD]}"
+
+  local -a _workspaces
+
+  local -ar _arg2_subcmds=('add' 'cache' 'root')
+  local -a _arg2_candidates=("${_arg2_subcmds[@]}")
+
+  # TODO: probably want to move to module files in the bin script if we add any
+  # more subcommands/properties
+  # Easiest way to buy ourselves pattern matching in place of... this
+  local -ar _arg3_subcmds=('cache' 'root')
+  local -ar _arg3_cache_property_ops=('get' 'set' 'update')
+  local -ar _arg3_root_property_ops=('get' 'set')
+  local -a _arg3_candidates
+
+  local -ar _arg4_cache_property_ops=('get' 'set' 'update')
+  local -ar _arg4_root_property_ops=('get' 'set')
+  local -a _arg4_candidates
+
+  local _workspace='default'
+
+  case $COMP_CWORD in
+  0 | 1)
+    return
+    ;;
+  2)
+    __git_workspace_get_matching_workspace_names '_workspaces' "$_cur"
+    _arg2_candidates+=("${_workspaces[@]}")
+
+    __gitcomp "${_arg2_candidates[*]}"
+    return
+    ;;
+  3)
+    local -r _prev="${COMP_WORDS[2]}"
+
+    if [[ "$_prev" == 'add' ]]; then
+      # 'add' takes either an arbitrary user-provided arg or no arg
+      # nothing to complete here
+      return
+    fi
+
+    if [[ "$_prev" == 'cache' ]]; then
+      _arg3_candidates+=("${_arg3_cache_property_ops[@]}")
+    fi
+
+    if [[ "$_prev" == 'root' ]]; then
+      _arg3_candidates+=("${_arg3_root_property_ops[@]}")
+    fi
+
+    __git_workspace_get_matching_workspace_names '_workspaces' "$_prev"
+
+    if [[ " ${_workspaces[*]} " =~ " ${_prev} " ]]; then
+      _arg3_candidates+=("${_arg3_subcmds[@]}")
+    fi
+
+    __gitcomp "${_arg3_candidates[*]}"
+    return
+    ;;
+  4)
+    local -r _prev="${COMP_WORDS[3]}"
+
+    if [[ " ${_arg3_cache_property_ops[*]} " =~ " $_prev " ]]; then
+      # Property getters take no arg - setters take a user-provided arg
+      return
+    fi
+
+    if [[ "$_prev" == 'cache' ]]; then
+      _arg4_candidates+=("${_arg4_cache_property_ops[@]}")
+    fi
+
+    if [[ "$_prev" == 'root' ]]; then
+      _arg4_candidates+=("${_arg4_root_property_ops[@]}")
+    fi
+
+    if [[ ${#_arg4_candidates[@]} -gt 0 ]]; then
+      __gitcomp "${_arg4_candidates[*]}"
+      return
+    fi
+    ;;
+  *)
+    local -r _workspace_cmd_arg="${COMP_WORDS[2]}"
+
+    if [[ " ${_arg2_subcmds[*]} " =~ " ${_workspace_cmd_arg} " ]]; then
+      return
+    fi
+
+    __git_workspace_get_matching_workspace_names '_workspaces' "$_workspace_cmd_arg"
+
+    if [[ ${#_workspaces[@]} -eq 0 ]]; then
+      return
+    fi
+
+    _workspace="$_workspace_cmd_arg"
+    ;;
+  esac
+
+  local -r OLD_COMP_SUBSTR="${COMP_WORDS[*]:1:2}"
+  local -r COMP_WORDS_REBUILT=('git' "${COMP_WORDS[@]:3}")
+
+  # Forward a Git command line without the `profile` option and arg so that we
+  # can take advantage of completion for all available commands
+  # Note that we substract the trailing space from COMP_POINT
+  # to prevent displacing the completion cursor
+  COMP_WORDS=("${COMP_WORDS_REBUILT[@]}")
+  COMP_LINE="${COMP_WORDS_REBUILT[*]}"
+  COMP_CWORD=$((COMP_CWORD - 2))
+  COMP_POINT=$((COMP_POINT - ${#OLD_COMP_SUBSTR} - 1))
+
+  GIT_WORKSPACE="$_workspace" _comp_command_offset 0
+}
