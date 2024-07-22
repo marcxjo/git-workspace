@@ -1,9 +1,5 @@
 # Convenience functions reusable in any shell context
 
-# Suppress warnings about expression-checking against literal strings
-# We do this intentionally to check whether a word is an element in an array
-# shellcheck disable=SC2076
-
 [[ -n "$LIBGITWORKSPACE_COMMON_SH" ]] && return
 
 LIBGITWORKSPACE_COMMON_SH=1

@@ -20,7 +20,8 @@ NAME
     $SCRIPT_NAME - track the repositories in your workspaces
 
 SYNOPSIS
-    git workspace add [WORKSPACE] [ROOT_PATH]
+    git workspace [WORKSPACE] COMMAND [OPTIONS]
+    git workspace add [WORKSPACE]
     git workspace [WORKSPACE] root get
     git workspace [WORKSPACE] root set ROOT_PATH
     git workspace [WORKSPACE] cache get
@@ -37,6 +38,16 @@ DESCRIPTION
     ROOT_PATH
         The absolute path to the workspace's root directory (i.e., where all
         repositories belonging to this workspace can be found)
+
+
+    Environment variables:
+
+    GIT_WORKSPACE
+        Set by $SCRIPT_NAME when forwarding to git.
+        This enables use of the workspace's configuration settings in follow-up
+        processing, such as git hooks.
+        If the workspace's \`rootPath\` and \`cacheFile\` are not defined, then
+        the command will not be forwarded $SCRIPT_NAME will exit with status 1.
 
 EOF
 }
@@ -146,7 +157,8 @@ git_workspace_rm() {
 git_workspace_root_get() {
   local -r _workspace_name="$1"
 
-  get_workspace_rootPath "$_workspace_name"
+  get_workspace_rootPath "$_workspace_name" ||
+    append_err_msg "property 'rootPath' is not set for workspace '${_workspace_name}'"
 }
 
 git_workspace_root_set() {
@@ -182,7 +194,8 @@ git_workspace_root_property() {
 git_workspace_cache_get() {
   local -r _workspace_name="$1"
 
-  get_workspace_cacheFile "$_workspace_name"
+  get_workspace_cacheFile "$_workspace_name" ||
+    append_err_msg "property 'cacheFile' is not set for workspace '${_workspace_name}'"
 }
 
 git_workspace_cache_set() {
@@ -226,11 +239,28 @@ git_workspace_cache_property() {
   esac
 }
 
-git_workspace_unsupported_property() {
-  local -r _arg="$1"
+git_workspace_exec_git_validate_workspace() {
+  local -r _workspace_name="$1"
+  local _workspace_root
+  local _workspace_cache
 
-  append_err_msg "unsupported parameter '${_arg}' - use 'add' to create a new workspace" &&
-    return 1
+  local -i status=0
+
+  _workspace_root="$(get_workspace_rootPath "$_workspace_name")"
+
+  [[ -z "$_workspace_root" ]] &&
+    append_err_msg "cannot validate workspace: root directory is undefined" &&
+    status=1
+
+  # TODO: not really sure we need to require a cache file
+  # For now, keeping it mandatory for simplicity, but may revisit
+  _workspace_cache="$(get_workspace_cacheFile "$_workspace_name")"
+
+  [[ -z "$_workspace_cache" ]] &&
+    append_err_msg "cannot validate workspace: cache file is undefined" &&
+    status=1
+
+  return $status
 }
 
 ################################################################################
@@ -239,11 +269,11 @@ is_a_workspace() {
   local -r _candidate="$1"
   local -rn _workspace_arr="$2"
 
-  is_in_array "$_candidate" '_workspaces_arr'
+  is_in_array "$_candidate" '_workspace_arr'
 }
 
 get_all_workspaces() {
-  git config --global --list | grep "workspace" | cut -d. -f2 | sort | uniq
+  git config --global --name-only --get-regexp '^workspace.*' | cut -d'.' -f2 | sort | uniq
 }
 
 print_log_msgs() {
@@ -252,13 +282,13 @@ print_log_msgs() {
 }
 
 main() {
-  IFS=$'\n' local -ar _workspaces=("$(get_all_workspaces)")
+  local -ar _workspaces=("$(get_all_workspaces | tr '\n' ' ')")
 
   local _workspace_name='default'
   local _workspace_root
   local _workspace_cache
-  local _property
   local _verb
+  local _exec_git
 
   is_a_workspace "$1" '_workspaces' &&
     _workspace_name="$1" &&
@@ -284,7 +314,8 @@ main() {
     git_workspace_cache_property "$_verb" "$_workspace_name" "$_workspace_cache"
     ;;
   *)
-    git_workspace_unsupported_property "$1"
+    git_workspace_exec_git_validate_workspace "$_workspace_name" &&
+      _exec_git=1
     ;;
   esac
 
@@ -297,7 +328,10 @@ main() {
     usage &&
     exit $status
 
-  exit $status
+  [[ -n "${_exec_git+1}" ]] &&
+    exec env GIT_WORKSPACE="$_workspace_name" git "${@}"
+
+  return $status
 }
 
 main "$@"
