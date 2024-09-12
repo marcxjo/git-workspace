@@ -1,0 +1,21 @@
+#!/bin/bash
+
+[[ -z "${GIT_WORKSPACE}" ]] && return
+
+main() {
+  local -r _cache_file=$(git workspace "${GIT_WORKSPACE}" cache get)
+
+  local -r _tmp_dir="${XDG_RUNTIME_DIR}/git-workspace/${GIT_PROFILE}/${GIT_WORKSPACE}"
+  mkdir -p "$_tmp_dir"
+
+  local -r _tmp_cache="${_tmp_dir}/workspace.cache"
+
+  cat "${_cache_file}" >"${_tmp_cache}"
+  echo "${GIT_DIR%/*}" >>"${_tmp_cache}"
+
+  sort "${_tmp_cache}" | uniq >"${_cache_file}"
+}
+
+echo "Adding ${GIT_DIR%/*} to workspace cache..."
+main
+echo "Success!"
